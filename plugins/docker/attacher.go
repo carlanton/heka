@@ -24,9 +24,11 @@ package docker
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fsouza/go-dockerclient"
 )
@@ -89,9 +91,12 @@ func NewAttachManager(client *docker.Client, attachErrors chan<- *AttachError) (
 			m.errors <- &AttachError{err.Error()}
 		}
 		for msg := range events {
+			fmt.Println("AttachManager: Waiting for events")
 			if msg.Status == "start" {
 				go m.attach(msg.ID[:12])
 			}
+
+			m.errors <- &AttachError{msg.Status}
 		}
 		m.errors <- &AttachError{"Docker event channel is closed"}
 	}()
@@ -122,7 +127,9 @@ func (m *AttachManager) attach(id string) {
 		})
 		outwr.Close()
 		errwr.Close()
+		fmt.Println("outwr errwr Channels are closed")
 		if err != nil {
+			fmt.Println("Error: ", err.Error())
 			close(success)
 			failure <- err
 		}
@@ -131,6 +138,7 @@ func (m *AttachManager) attach(id string) {
 		delete(m.attached, id)
 		m.Unlock()
 	}()
+
 	_, ok := <-success
 	if ok {
 		m.Lock()
@@ -177,11 +185,17 @@ func (m *AttachManager) Get(id string) *LogPump {
 func (m *AttachManager) Listen(logstream chan *Log, closer <-chan bool) {
 	source := new(Source) // todo: Make the source parameters configurable
 	events := make(chan *AttachEvent)
+
+	clientTimeout := make(chan struct{})
+	go m.clientMonitor(clientTimeout)
+
 	m.addListener(events)
 	defer m.removeListener(events)
+	defer fmt.Println("Listen defered")
 	for {
 		select {
 		case event := <-events:
+			fmt.Println("GOT EVENT: ", event.Type)
 			if event.Type == "attach" && (source.All() ||
 				(source.ID != "" && strings.HasPrefix(event.ID, source.ID)) ||
 				(source.Name != "" && event.Name == source.Name) ||
@@ -198,7 +212,21 @@ func (m *AttachManager) Listen(logstream chan *Log, closer <-chan bool) {
 				strings.HasPrefix(event.ID, source.ID) {
 				return
 			}
+
+		case <-clientTimeout:
+			return
+
 		case <-closer:
+			return
+		}
+	}
+}
+
+func (m *AttachManager) clientMonitor(clientTimeout chan struct{}) {
+	c := time.Tick(5 * time.Second)
+	for _ = range c {
+		if m.client.Ping() != nil {
+			clientTimeout <- struct{}{}
 			return
 		}
 	}
