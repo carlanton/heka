@@ -19,11 +19,12 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
-	"github.com/mozilla-services/heka/message"
-	. "github.com/mozilla-services/heka/pipeline"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mozilla-services/heka/message"
+	. "github.com/mozilla-services/heka/pipeline"
 )
 
 const lowerhex = "0123456789abcdef"
@@ -208,6 +209,19 @@ type ESJsonEncoder struct {
 	timestampFormat string
 	rawBytesFields  []string
 	coord           *ElasticSearchCoordinates
+	fieldName       *ESFieldMapping
+}
+
+type ESFieldMapping struct {
+	Timestamp  string
+	Uuid       string
+	Type       string
+	Logger     string
+	Severity   string
+	Payload    string
+	EnvVersion string
+	Pid        string
+	Hostname   string
 }
 
 type ESJsonEncoderConfig struct {
@@ -227,6 +241,8 @@ type ESJsonEncoderConfig struct {
 	Id string
 	// Fields to which formatting will not be applied.
 	RawBytesFields []string `toml:"raw_bytes_fields"`
+
+	FieldMapping *ESFieldMapping `toml:"field_mapping"`
 }
 
 func (e *ESJsonEncoder) ConfigStruct() interface{} {
@@ -236,6 +252,18 @@ func (e *ESJsonEncoder) ConfigStruct() interface{} {
 		Timestamp:            "2006-01-02T15:04:05.000Z",
 		ESIndexFromTimestamp: false,
 		Id:                   "",
+
+		FieldMapping: &ESFieldMapping{
+			Timestamp:  "Timestamp",
+			Uuid:       "Uuid",
+			Type:       "Type",
+			Logger:     "Logger",
+			Severity:   "Severity",
+			Payload:    "Payload",
+			EnvVersion: "EnvVersion",
+			Pid:        "Pid",
+			Hostname:   "Hostname",
+		},
 	}
 
 	config.Fields = []string{
@@ -265,6 +293,7 @@ func (e *ESJsonEncoder) Init(config interface{}) (err error) {
 		ESIndexFromTimestamp: conf.ESIndexFromTimestamp,
 		Id:                   conf.Id,
 	}
+	e.fieldName = conf.FieldMapping
 	return
 }
 
@@ -278,24 +307,24 @@ func (e *ESJsonEncoder) Encode(pack *PipelinePack) (output []byte, err error) {
 	for _, f := range e.fields {
 		switch strings.ToLower(f) {
 		case "uuid":
-			writeStringField(first, &buf, f, m.GetUuidString())
+			writeStringField(first, &buf, e.fieldName.Uuid, m.GetUuidString())
 		case "timestamp":
 			t := time.Unix(0, m.GetTimestamp()).UTC()
-			writeStringField(first, &buf, f, t.Format(e.timestampFormat))
+			writeStringField(first, &buf, e.fieldName.Timestamp, t.Format(e.timestampFormat))
 		case "type":
 			writeStringField(first, &buf, f, m.GetType())
 		case "logger":
-			writeStringField(first, &buf, f, m.GetLogger())
+			writeStringField(first, &buf, e.fieldName.Logger, m.GetLogger())
 		case "severity":
-			writeIntField(first, &buf, f, m.GetSeverity())
+			writeIntField(first, &buf, e.fieldName.Severity, m.GetSeverity())
 		case "payload":
-			writeStringField(first, &buf, f, m.GetPayload())
+			writeStringField(first, &buf, e.fieldName.Payload, m.GetPayload())
 		case "envversion":
 			writeStringField(first, &buf, f, m.GetEnvVersion())
 		case "pid":
-			writeIntField(first, &buf, f, m.GetPid())
+			writeIntField(first, &buf, e.fieldName.Pid, m.GetPid())
 		case "hostname":
-			writeStringField(first, &buf, f, m.GetHostname())
+			writeStringField(first, &buf, e.fieldName.Hostname, m.GetHostname())
 		case "fields":
 			for _, field := range m.Fields {
 				raw := false
